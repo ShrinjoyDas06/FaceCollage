@@ -1,28 +1,34 @@
-package com.iykyk.facecollage
+package com.iykyk.facecollage.processing
 
 import android.graphics.Bitmap
 import kotlin.math.sqrt
+
+data class FaceSample(
+    val bitmap: Bitmap,
+    val area: Int,
+    val embedding: FloatArray
+)
+
+private data class PersonCluster(
+    var representativeFace: Bitmap,
+    var representativeArea: Int,
+    var embedding: FloatArray
+)
 
 class FaceClusterer(
     private val similarityThreshold: Float = 0.65f
 ) {
 
-    private data class Cluster(
-        var representative: Bitmap,
-        var embedding: FloatArray,
-        var largestArea: Int
-    )
-
     fun clusterFaces(
-        detectedFaces: List<DetectedFace>
+        faces: List<FaceSample>
     ): List<Bitmap> {
 
         val clusters =
-            mutableListOf<Cluster>()
+            mutableListOf<PersonCluster>()
 
-        for (face in detectedFaces) {
+        for (face in faces) {
 
-            var bestCluster: Cluster? = null
+            var bestCluster: PersonCluster? = null
             var bestSimilarity = -1f
 
             for (cluster in clusters) {
@@ -34,12 +40,8 @@ class FaceClusterer(
                     )
 
                 if (similarity > bestSimilarity) {
-
-                    bestSimilarity =
-                        similarity
-
-                    bestCluster =
-                        cluster
+                    bestSimilarity = similarity
+                    bestCluster = cluster
                 }
             }
 
@@ -48,37 +50,32 @@ class FaceClusterer(
                 bestSimilarity >= similarityThreshold
             ) {
 
-                // Same person.
-                //
-                // Keep the largest/highest-quality
-                // detected face as the representative.
-                if (face.area > bestCluster.largestArea) {
+                if (
+                    face.area >
+                    bestCluster.representativeArea
+                ) {
 
-                    bestCluster.representative =
+                    bestCluster.representativeFace =
                         face.bitmap
 
-                    bestCluster.embedding =
-                        face.embedding
-
-                    bestCluster.largestArea =
+                    bestCluster.representativeArea =
                         face.area
                 }
 
             } else {
 
-                // New person.
                 clusters.add(
-                    Cluster(
-                        representative = face.bitmap,
-                        embedding = face.embedding,
-                        largestArea = face.area
+                    PersonCluster(
+                        representativeFace = face.bitmap,
+                        representativeArea = face.area,
+                        embedding = face.embedding
                     )
                 )
             }
         }
 
         return clusters.map {
-            it.representative
+            it.representativeFace
         }
     }
 
@@ -97,19 +94,14 @@ class FaceClusterer(
 
         for (i in a.indices) {
 
-            dot +=
-                a[i] * b[i]
-
-            normA +=
-                a[i] * a[i]
-
-            normB +=
-                b[i] * b[i]
+            dot += a[i] * b[i]
+            normA += a[i] * a[i]
+            normB += b[i] * b[i]
         }
 
         if (
-            normA <= 0f ||
-            normB <= 0f
+            normA == 0f ||
+            normB == 0f
         ) {
             return 0f
         }

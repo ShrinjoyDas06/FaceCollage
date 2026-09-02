@@ -4,8 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import kotlin.math.ceil
-import kotlin.math.min
 import kotlin.math.sqrt
 
 object CollageBuilder {
@@ -16,19 +16,14 @@ object CollageBuilder {
     ): Bitmap {
 
         if (faces.isEmpty()) {
-
-            return Bitmap.createBitmap(
-                1,
-                1,
-                Bitmap.Config.ARGB_8888
+            throw IllegalArgumentException(
+                "Cannot create collage with no faces."
             )
         }
 
         val columns =
             ceil(
-                sqrt(
-                    faces.size.toDouble()
-                )
+                sqrt(faces.size.toDouble())
             ).toInt()
 
         val rows =
@@ -37,30 +32,25 @@ object CollageBuilder {
                         columns
             ).toInt()
 
-        val width =
-            columns * cellSize
-
-        val height =
-            rows * cellSize
-
-        val collage =
+        val result =
             Bitmap.createBitmap(
-                width,
-                height,
+                columns * cellSize,
+                rows * cellSize,
                 Bitmap.Config.ARGB_8888
             )
 
         val canvas =
-            Canvas(collage)
+            Canvas(result)
 
-        canvas.drawColor(
-            Color.WHITE
-        )
+        canvas.drawColor(Color.WHITE)
 
         val paint =
             Paint(Paint.ANTI_ALIAS_FLAG)
 
-        for ((index, face) in faces.withIndex()) {
+        for (
+            (index, face)
+            in faces.withIndex()
+        ) {
 
             val column =
                 index % columns
@@ -68,57 +58,22 @@ object CollageBuilder {
             val row =
                 index / columns
 
-            val left =
-                column * cellSize
-
-            val top =
-                row * cellSize
-
-            // Preserve aspect ratio instead of stretching
-            // every face into a square.
-            val scale =
-                min(
-                    cellSize.toFloat() /
-                            face.width,
-
-                    cellSize.toFloat() /
-                            face.height
+            val destination =
+                Rect(
+                    column * cellSize,
+                    row * cellSize,
+                    (column + 1) * cellSize,
+                    (row + 1) * cellSize
                 )
-
-            val scaledWidth =
-                (face.width * scale)
-                    .toInt()
-
-            val scaledHeight =
-                (face.height * scale)
-                    .toInt()
-
-            val scaled =
-                Bitmap.createScaledBitmap(
-                    face,
-                    scaledWidth,
-                    scaledHeight,
-                    true
-                )
-
-            val x =
-                left +
-                        (cellSize - scaledWidth) / 2
-
-            val y =
-                top +
-                        (cellSize - scaledHeight) / 2
 
             canvas.drawBitmap(
-                scaled,
-                x.toFloat(),
-                y.toFloat(),
+                face,
+                null,
+                destination,
                 paint
             )
-
-            scaled.recycle()
         }
 
-        return collage
+        return result
     }
 }
