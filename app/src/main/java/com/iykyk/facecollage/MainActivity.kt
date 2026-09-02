@@ -5,16 +5,24 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
-import android.net.Uri
 import android.os.Bundle
-import android.os.CountDownTimer
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
-import androidx.camera.video.*
-import androidx.core.app.ActivityCompat
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.google.mlkit.vision.common.InputImage
@@ -23,158 +31,577 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.iykyk.facecollage.databinding.ActivityMainBinding
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
-    private var countdownTimer: CountDownTimer? = null
-    private val executor = Executors.newSingleThreadExecutor()
+    private var countdownTimer: android.os.CountDownTimer? = null
+
+    private lateinit var processingExecutor: ExecutorService
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val permissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+
+            if (granted) {
+                startCamera()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Camera permission is required.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        if (allPermissionsGranted()) {
-            startCamera()
-        } else {
-            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, 1001)
+        processingExecutor = Executors.newSingleThreadExecutor()
+
+        binding.btnRecord.setOnClickListener {
+            startRecording()
         }
 
-        binding.btnRecord.setOnClickListener { startRecording() }
-        binding.btnCancel.setOnClickListener { cancelRecording() }
+        binding.btnCancel.setOnClickListener {
+            cancelRecording()
+        }
+
+        binding.btnShare.setOnClickListener {
+            shareCurrentCollage()
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            startCamera()
+        } else {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
     }
 
+    // ---------------------------------------------------------
+    // CAMERA
+    // ---------------------------------------------------------
+
     private fun startCamera() {
-        val cameraProviderFuture = androidx.camera.lifecycle.ProcessCameraProvider.getInstance(this)
+
+        val cameraProviderFuture =
+            ProcessCameraProvider.getInstance(this)
+
         cameraProviderFuture.addListener({
+
             val cameraProvider = cameraProviderFuture.get()
-            val preview = androidx.camera.core.Preview.Builder().build().also {
-                it.setSurfaceProvider(binding.viewFinder.surfaceProvider)
-            }
-            val recorder = Recorder.Builder()
-                .setQualitySelector(QualitySelector.from(Quality.SD))
+
+            val preview = Preview.Builder()
                 .build()
+                .also {
+                    it.setSurfaceProvider(binding.viewFinder.surfaceProvider)
+                }
+
+            val recorder = Recorder.Builder()
+                .setQualitySelector(
+                    QualitySelector.from(Quality.SD)
+                )
+                .build()
+
             videoCapture = VideoCapture.withOutput(recorder)
 
             try {
+
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, videoCapture)
+
+                cameraProvider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    videoCapture
+                )
+
             } catch (e: Exception) {
-                e.printStackTrace()
+
+                Toast.makeText(
+                    this,
+                    "Unable to start camera: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
+
         }, ContextCompat.getMainExecutor(this))
     }
 
+    // ---------------------------------------------------------
+    // RECORDING
+    // ---------------------------------------------------------
+
     private fun startRecording() {
-        val capture = videoCapture ?: return
-        val outputFile = File(externalCacheDir, "capture_${System.currentTimeMillis()}.mp4")
-        val outputOptions = FileOutputOptions.Builder(outputFile).build()
+
+        val capture = videoCapture
+
+        if (capture == null) {
+            Toast.makeText(
+                this,
+                "Camera is not ready.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        if (activeRecording != null) {
+            return
+        }
+
+        val outputFile = File(
+            externalCacheDir,
+            "capture_${System.currentTimeMillis()}.mp4"
+        )
+
+        val outputOptions =
+            FileOutputOptions.Builder(outputFile).build()
 
         binding.btnRecord.visibility = View.GONE
         binding.btnCancel.visibility = View.VISIBLE
+        binding.btnShare.visibility = View.GONE
         binding.tvTimer.visibility = View.VISIBLE
+        binding.imgCollage.visibility = View.GONE
+
+        binding.tvTimer.text = "20"
 
         activeRecording = capture.output
-            .prepareRecording(this, outputOptions)
-            .start(ContextCompat.getMainExecutor(this)) { event ->
-                if (event is VideoRecordEvent.Finalize) {
-                    binding.tvTimer.visibility = View.GONE
-                    binding.btnCancel.visibility = View.GONE
-                    binding.btnRecord.visibility = View.VISIBLE
-                    if (!event.hasError()) {
-                        processVideo(outputFile)
-                    }
-                }
-            }
-
-        // 20-second automatic countdown auto-stop
-        countdownTimer = object : CountDownTimer(20000, 1000) {
-            override fun onTick(ms: Long) {
-                binding.tvTimer.text = "Recording: ${ms / 1000}s"
-            }
-            override fun onFinish() {
-                activeRecording?.stop()
-                activeRecording = null
-            }
-        }.start()
-    }
-
-    private fun cancelRecording() {
-        countdownTimer?.cancel()
-        activeRecording?.stop()
-        activeRecording = null
-        binding.btnCancel.visibility = View.GONE
-        binding.tvTimer.visibility = View.GONE
-        binding.btnRecord.visibility = View.VISIBLE
-    }
-
-    private fun processVideo(file: File) {
-        binding.progressLayout.visibility = View.VISIBLE
-        executor.execute {
-            val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(file.absolutePath)
-            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
-            
-            val detectedFaces = mutableListOf<Pair<Bitmap, Int>>()
-            val detector = FaceDetection.getClient(
-                FaceDetectorOptions.Builder().setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST).build()
+            .prepareRecording(
+                this,
+                outputOptions
             )
+            .start(
+                ContextCompat.getMainExecutor(this)
+            ) { event ->
 
-            // Extract ~2 frames per second
-            for (timeUs in 0 until durationMs * 1000 step 500000) {
-                val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: continue
-                val image = InputImage.fromBitmap(frame, 0)
-                
-                detector.process(image).addOnSuccessListener { faces ->
-                    for (face in faces) {
-                        val bounds = face.boundingBox
-                        if (bounds.left >= 0 && bounds.top >= 0 && 
-                            bounds.right <= frame.width && bounds.bottom <= frame.height) {
-                            val crop = Bitmap.createBitmap(frame, bounds.left, bounds.top, bounds.width(), bounds.height())
-                            detectedFaces.add(Pair(crop, bounds.width() * bounds.height()))
+                when (event) {
+
+                    is VideoRecordEvent.Start -> {
+                        binding.tvTimer.text = "20"
+                    }
+
+                    is VideoRecordEvent.Finalize -> {
+
+                        countdownTimer?.cancel()
+                        countdownTimer = null
+
+                        activeRecording = null
+
+                        binding.tvTimer.visibility = View.GONE
+                        binding.btnCancel.visibility = View.GONE
+                        binding.btnRecord.visibility = View.VISIBLE
+
+                        if (!event.hasError()) {
+
+                            processVideo(outputFile)
+
+                        } else {
+
+                            Toast.makeText(
+                                this,
+                                "Recording failed: ${event.error}",
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                     }
                 }
             }
 
-            // Cluster unique faces
-            val uniqueFaces = FaceClusterer().clusterFaces(detectedFaces)
-            val collageBitmap = CollageBuilder.createGridCollage(uniqueFaces)
+        startCountdown()
+    }
 
-            runOnUiThread {
-                binding.progressLayout.visibility = View.GONE
-                binding.imgCollage.setImageBitmap(collageBitmap)
-                binding.btnShare.setOnClickListener { shareCollage(collageBitmap) }
-                binding.btnShare.visibility = View.VISIBLE
+    private fun startCountdown() {
+
+        countdownTimer =
+            object : android.os.CountDownTimer(20_000, 1_000) {
+
+                override fun onTick(millisUntilFinished: Long) {
+
+                    val seconds =
+                        (millisUntilFinished + 999) / 1000
+
+                    binding.tvTimer.text =
+                        seconds.toString()
+                }
+
+                override fun onFinish() {
+
+                    binding.tvTimer.text = "0"
+
+                    activeRecording?.stop()
+                }
+
+            }.start()
+    }
+
+    private fun cancelRecording() {
+
+        countdownTimer?.cancel()
+        countdownTimer = null
+
+        activeRecording?.stop()
+        activeRecording = null
+
+        binding.tvTimer.visibility = View.GONE
+        binding.btnCancel.visibility = View.GONE
+        binding.btnRecord.visibility = View.VISIBLE
+    }
+
+    // ---------------------------------------------------------
+    // VIDEO PROCESSING
+    // ---------------------------------------------------------
+
+    private fun processVideo(videoFile: File) {
+
+        binding.progressLayout.visibility = View.VISIBLE
+
+        processingExecutor.execute {
+
+            try {
+
+                val retriever = MediaMetadataRetriever()
+
+                retriever.setDataSource(
+                    videoFile.absolutePath
+                )
+
+                val durationMs =
+                    retriever.extractMetadata(
+                        MediaMetadataRetriever.METADATA_KEY_DURATION
+                    )?.toLong() ?: 0L
+
+                if (durationMs <= 0) {
+                    retriever.release()
+                    showError("Could not read recorded video.")
+                    return@execute
+                }
+
+                val detectorOptions =
+                    FaceDetectorOptions.Builder()
+                        .setPerformanceMode(
+                            FaceDetectorOptions.PERFORMANCE_MODE_FAST
+                        )
+                        .setLandmarkMode(
+                            FaceDetectorOptions.LANDMARK_MODE_NONE
+                        )
+                        .setClassificationMode(
+                            FaceDetectorOptions.CLASSIFICATION_MODE_NONE
+                        )
+                        .build()
+
+                val detector =
+                    FaceDetection.getClient(detectorOptions)
+
+                val embedder = FaceEmbedder(this)
+
+                val detectedFaces =
+                    mutableListOf<DetectedFace>()
+
+                // Approximately 2 frames per second.
+                val frameIntervalUs = 500_000L
+
+                var timeUs = 0L
+
+                while (timeUs < durationMs * 1000L) {
+
+                    val frame =
+                        retriever.getFrameAtTime(
+                            timeUs,
+                            MediaMetadataRetriever.OPTION_CLOSEST
+                        )
+
+                    if (frame != null) {
+
+                        try {
+
+                            val inputImage =
+                                InputImage.fromBitmap(
+                                    frame,
+                                    0
+                                )
+
+                            // Wait for ML Kit to finish this frame.
+                            val faces =
+                                com.google.android.gms.tasks.Tasks
+                                    .await(
+                                        detector.process(inputImage)
+                                    )
+
+                            for (face in faces) {
+
+                                val bounds =
+                                    face.boundingBox
+
+                                val left =
+                                    bounds.left.coerceAtLeast(0)
+
+                                val top =
+                                    bounds.top.coerceAtLeast(0)
+
+                                val right =
+                                    bounds.right.coerceAtMost(
+                                        frame.width
+                                    )
+
+                                val bottom =
+                                    bounds.bottom.coerceAtMost(
+                                        frame.height
+                                    )
+
+                                val width =
+                                    right - left
+
+                                val height =
+                                    bottom - top
+
+                                if (width > 20 && height > 20) {
+
+                                    val crop =
+                                        Bitmap.createBitmap(
+                                            frame,
+                                            left,
+                                            top,
+                                            width,
+                                            height
+                                        )
+
+                                    val embedding =
+                                        embedder.getEmbedding(
+                                            crop
+                                        )
+
+                                    detectedFaces.add(
+                                        DetectedFace(
+                                            crop,
+                                            embedding,
+                                            width * height
+                                        )
+                                    )
+                                }
+                            }
+
+                        } finally {
+                            frame.recycle()
+                        }
+                    }
+
+                    timeUs += frameIntervalUs
+                }
+
+                detector.close()
+                embedder.close()
+                retriever.release()
+
+                if (detectedFaces.isEmpty()) {
+
+                    showError(
+                        "No faces were detected. Try recording again with faces clearly visible."
+                    )
+
+                    return@execute
+                }
+
+                val uniqueFaces =
+                    FaceClusterer(
+                        similarityThreshold = 0.65f
+                    ).clusterFaces(
+                        detectedFaces
+                    )
+
+                if (uniqueFaces.isEmpty()) {
+
+                    showError(
+                        "No unique faces were found."
+                    )
+
+                    return@execute
+                }
+
+                val collage =
+                    CollageBuilder.createGridCollage(
+                        uniqueFaces,
+                        cellSize = 300
+                    )
+
+                mainHandler.post {
+
+                    binding.progressLayout.visibility =
+                        View.GONE
+
+                    binding.imgCollage.setImageBitmap(
+                        collage
+                    )
+
+                    binding.imgCollage.visibility =
+                        View.VISIBLE
+
+                    binding.btnShare.visibility =
+                        View.VISIBLE
+
+                    binding.btnRecord.visibility =
+                        View.VISIBLE
+
+                    Toast.makeText(
+                        this,
+                        "${uniqueFaces.size} unique face(s) found.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+
+                // Save the current collage for sharing.
+                saveCollageToInternalStorage(collage)
+
+            } catch (e: Exception) {
+
+                e.printStackTrace()
+
+                showError(
+                    "Processing failed: ${e.message}"
+                )
             }
         }
     }
 
-    private fun shareCollage(bitmap: Bitmap) {
-        val file = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "face_collage.png")
-        val out = FileOutputStream(file)
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-        out.flush()
-        out.close()
+    // ---------------------------------------------------------
+    // COLLAGE STORAGE / SHARING
+    // ---------------------------------------------------------
 
-        val uri = FileProvider.getUriForFile(this, "$packageName.provider", file)
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/png"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    private var currentCollageFile: File? = null
+
+    private fun saveCollageToInternalStorage(
+        bitmap: Bitmap
+    ) {
+
+        val file =
+            File(
+                filesDir,
+                "face_collage.png"
+            )
+
+        FileOutputStream(file).use { output ->
+
+            bitmap.compress(
+                Bitmap.CompressFormat.PNG,
+                100,
+                output
+            )
         }
-        startActivity(Intent.createChooser(intent, "Share Face Collage"))
+
+        currentCollageFile = file
     }
 
-    private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
-        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+    private fun shareCurrentCollage() {
+
+        val file = currentCollageFile
+
+        if (file == null || !file.exists()) {
+
+            Toast.makeText(
+                this,
+                "No collage available.",
+                Toast.LENGTH_SHORT
+            ).show()
+
+            return
+        }
+
+        try {
+
+            val uri =
+                FileProvider.getUriForFile(
+                    this,
+                    "${applicationContext.packageName}.provider",
+                    file
+                )
+
+            val shareIntent =
+                Intent(Intent.ACTION_SEND).apply {
+
+                    type = "image/png"
+
+                    putExtra(
+                        Intent.EXTRA_STREAM,
+                        uri
+                    )
+
+                    addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+
+            startActivity(
+                Intent.createChooser(
+                    shareIntent,
+                    "Share Face Collage"
+                )
+            )
+
+        } catch (e: Exception) {
+
+            Toast.makeText(
+                this,
+                "Unable to share collage: ${e.message}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
-    companion object {
-        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+    // ---------------------------------------------------------
+    // UI HELPERS
+    // ---------------------------------------------------------
+
+    private fun showError(message: String) {
+
+        mainHandler.post {
+
+            binding.progressLayout.visibility =
+                View.GONE
+
+            binding.btnCancel.visibility =
+                View.GONE
+
+            binding.btnRecord.visibility =
+                View.VISIBLE
+
+            binding.tvTimer.visibility =
+                View.GONE
+
+            Toast.makeText(
+                this,
+                message,
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    override fun onDestroy() {
+
+        countdownTimer?.cancel()
+        activeRecording?.stop()
+
+        processingExecutor.shutdown()
+
+        super.onDestroy()
     }
 }
+
+data class DetectedFace(
+    val bitmap: Bitmap,
+    val embedding: FloatArray,
+    val area: Int
+)

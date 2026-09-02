@@ -3,42 +3,118 @@ package com.iykyk.facecollage
 import android.graphics.Bitmap
 import kotlin.math.sqrt
 
-data class PersonCluster(
-    val embedding: FloatArray,
-    var representativeFace: Bitmap,
-    var maxFaceArea: Int
-)
+class FaceClusterer(
+    private val similarityThreshold: Float = 0.65f
+) {
 
-class FaceClusterer(private val similarityThreshold: Float = 0.65f) {
+    private data class Cluster(
+        var representative: Bitmap,
+        var embedding: FloatArray,
+        var largestArea: Int
+    )
 
-    fun clusterFaces(detectedFaces: List<Pair<Bitmap, Int>>): List<Bitmap> {
-        val clusters = mutableListOf<PersonCluster>()
+    fun clusterFaces(
+        detectedFaces: List<DetectedFace>
+    ): List<Bitmap> {
 
-        for ((faceCrop, area) in detectedFaces) {
-            // Standard embedding dummy fallback if model vector comparison is applied
-            val bestMatch = clusters.maxByOrNull { cosineSimilarity(it.embedding, FloatArray(128)) }
-            
-            if (bestMatch != null && cosineSimilarity(bestMatch.embedding, FloatArray(128)) > similarityThreshold) {
-                if (area > bestMatch.maxFaceArea) {
-                    bestMatch.representativeFace = faceCrop
-                    bestMatch.maxFaceArea = area
+        val clusters =
+            mutableListOf<Cluster>()
+
+        for (face in detectedFaces) {
+
+            var bestCluster: Cluster? = null
+            var bestSimilarity = -1f
+
+            for (cluster in clusters) {
+
+                val similarity =
+                    cosineSimilarity(
+                        face.embedding,
+                        cluster.embedding
+                    )
+
+                if (similarity > bestSimilarity) {
+
+                    bestSimilarity =
+                        similarity
+
+                    bestCluster =
+                        cluster
                 }
+            }
+
+            if (
+                bestCluster != null &&
+                bestSimilarity >= similarityThreshold
+            ) {
+
+                // Same person.
+                //
+                // Keep the largest/highest-quality
+                // detected face as the representative.
+                if (face.area > bestCluster.largestArea) {
+
+                    bestCluster.representative =
+                        face.bitmap
+
+                    bestCluster.embedding =
+                        face.embedding
+
+                    bestCluster.largestArea =
+                        face.area
+                }
+
             } else {
-                clusters.add(PersonCluster(FloatArray(128), faceCrop, area))
+
+                // New person.
+                clusters.add(
+                    Cluster(
+                        representative = face.bitmap,
+                        embedding = face.embedding,
+                        largestArea = face.area
+                    )
+                )
             }
         }
-        return clusters.map { it.representativeFace }
+
+        return clusters.map {
+            it.representative
+        }
     }
 
-    private fun cosineSimilarity(v1: FloatArray, v2: FloatArray): Float {
-        var dot = 0.0f
-        var normA = 0.0f
-        var normB = 0.0f
-        for (i in v1.indices) {
-            dot += v1[i] * v2[i]
-            normA += v1[i] * v1[i]
-            normB += v2[i] * v2[i]
+    private fun cosineSimilarity(
+        a: FloatArray,
+        b: FloatArray
+    ): Float {
+
+        if (a.size != b.size) {
+            return 0f
         }
-        return if (normA > 0 && normB > 0) dot / (sqrt(normA) * sqrt(normB)) else 0.0f
+
+        var dot = 0f
+        var normA = 0f
+        var normB = 0f
+
+        for (i in a.indices) {
+
+            dot +=
+                a[i] * b[i]
+
+            normA +=
+                a[i] * a[i]
+
+            normB +=
+                b[i] * b[i]
+        }
+
+        if (
+            normA <= 0f ||
+            normB <= 0f
+        ) {
+            return 0f
+        }
+
+        return dot /
+                (sqrt(normA) * sqrt(normB))
     }
 }
