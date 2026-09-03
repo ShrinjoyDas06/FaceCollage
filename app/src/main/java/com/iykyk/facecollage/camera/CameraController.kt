@@ -22,45 +22,65 @@ class CameraController(
 ) {
 
     private var previewView: PreviewView? = null
-    private var videoCapture: VideoCapture<Recorder>? = null
-    private var activeRecording: Recording? = null
-    private var timer: CountDownTimer? = null
 
-    private var currentOutput: File? = null
+    private var videoCapture:
+            VideoCapture<Recorder>? = null
 
-    private var wasCancelled = false
+    private var activeRecording:
+            Recording? = null
 
-    fun setPreviewView(view: PreviewView) {
+    private var timer:
+            CountDownTimer? = null
+
+    private var wasCancelled =
+        false
+
+    fun setPreviewView(
+        view: PreviewView
+    ) {
         previewView = view
     }
 
-    fun bindCamera(frontCamera: Boolean) {
+    fun bindCamera(
+        frontCamera: Boolean
+    ) {
 
-        val previewView = previewView ?: return
+        val previewView =
+            previewView ?: return
 
         val providerFuture =
-            ProcessCameraProvider.getInstance(context)
+            ProcessCameraProvider.getInstance(
+                context
+            )
 
         providerFuture.addListener({
 
-            val provider = providerFuture.get()
+            val provider =
+                providerFuture.get()
 
-            val preview = Preview.Builder()
-                .build()
-                .also {
-                    it.setSurfaceProvider(
-                        previewView.surfaceProvider
+            val preview =
+                Preview.Builder()
+                    .build()
+                    .also {
+
+                        it.setSurfaceProvider(
+                            previewView.surfaceProvider
+                        )
+                    }
+
+            val recorder =
+                Recorder.Builder()
+                    .setQualitySelector(
+                        QualitySelector.from(
+                            Quality.SD
+                        )
                     )
-                }
-
-            val recorder = Recorder.Builder()
-                .setQualitySelector(
-                    QualitySelector.from(Quality.SD)
-                )
-                .build()
+                    .build()
 
             videoCapture =
-                VideoCapture.withOutput(recorder)
+                VideoCapture.withOutput(
+                    recorder
+                )
 
             val selector =
                 if (frontCamera) {
@@ -81,6 +101,7 @@ class CameraController(
                 )
 
             } catch (e: Exception) {
+
                 e.printStackTrace()
             }
 
@@ -90,20 +111,25 @@ class CameraController(
     fun startRecording(
         onStarted: () -> Unit,
         onTick: (Int) -> Unit,
-        onFinished: (File?) -> Unit
+        onFinished: (File?) -> Unit,
+        onCancelled: () -> Unit
     ): File? {
 
-        val capture = videoCapture ?: return null
+        val capture =
+            videoCapture ?: return null
 
-        val outputFile = File(
-            context.cacheDir,
-            "capture_${System.currentTimeMillis()}.mp4"
-        )
-
-        currentOutput = outputFile
+        val outputFile =
+            File(
+                context.cacheDir,
+                "capture_${System.currentTimeMillis()}.mp4"
+            )
 
         val outputOptions =
-            FileOutputOptions.Builder(outputFile).build()
+            FileOutputOptions.Builder(
+                outputFile
+            ).build()
+
+        wasCancelled = false
 
         activeRecording =
             capture.output
@@ -112,12 +138,15 @@ class CameraController(
                     outputOptions
                 )
                 .start(
-                    ContextCompat.getMainExecutor(context)
+                    ContextCompat.getMainExecutor(
+                        context
+                    )
                 ) { event ->
 
                     when (event) {
 
                         is VideoRecordEvent.Start -> {
+
                             onStarted()
                         }
 
@@ -125,59 +154,123 @@ class CameraController(
 
                             timer?.cancel()
                             timer = null
+
                             activeRecording = null
 
                             if (wasCancelled) {
-                              outputFile.delete()
-                              currentOutput = null
-                              wasCancelled = false
+
+                                /*
+                                 * CameraX has FINISHED writing
+                                 * the file now.
+                                 *
+                                 * Only delete it here.
+                                 */
+
+                                if (outputFile.exists()) {
+                                    outputFile.delete()
+                                }
+
+                                wasCancelled = false
+
+                                onCancelled()
+
                             } else {
-                              if (event.hasError()) {
-                                onFinished(null)
-                              } else {
-                                onFinished(outputFile)
-                              }
-                              currentOutput = null
+
+                                if (
+                                    event.hasError()
+                                ) {
+
+                                    onFinished(null)
+
+                                } else {
+
+                                    if (
+                                        outputFile.exists()
+                                    ) {
+
+                                        onFinished(
+                                            outputFile
+                                        )
+
+                                    } else {
+
+                                        onFinished(null)
+                                    }
+                                }
                             }
                         }
                     }
                 }
 
-        timer = object : CountDownTimer(
-            20_000L,
-            1_000L
-        ) {
+        /*
+         * Maximum recording length = 20 seconds.
+         */
 
-            override fun onTick(
-                millisUntilFinished: Long
+        timer =
+            object : CountDownTimer(
+                20_000L,
+                1_000L
             ) {
-                onTick(
-                    (millisUntilFinished / 1000L).toInt()
-                )
-            }
 
-            override fun onFinish() {
-                activeRecording?.stop()
-            }
+                override fun onTick(
+                    millisUntilFinished: Long
+                ) {
 
-        }.start()
+                    onTick(
+                        (
+                                millisUntilFinished /
+                                        1000L
+                                ).toInt()
+                    )
+                }
+
+                override fun onFinish() {
+
+                    /*
+                     * Automatic 20-second finish.
+                     *
+                     * This is NOT a cancellation.
+                     */
+
+                    wasCancelled = false
+
+                    activeRecording?.stop()
+                }
+
+            }.start()
 
         return outputFile
     }
 
-    fun stopRecording(cancelled: Boolean) {
+    fun stopRecording(
+        cancelled: Boolean
+    ) {
 
         timer?.cancel()
         timer = null
 
-        wasCancelled = cancelled
-        
+        /*
+         * IMPORTANT:
+         *
+         * Do NOT set activeRecording = null here.
+         *
+         * CameraX still has to send Finalize.
+         */
+
+        wasCancelled =
+            cancelled
+
         activeRecording?.stop()
     }
 
     fun release() {
+
         timer?.cancel()
+
+        timer = null
+
         activeRecording?.stop()
+
         activeRecording = null
     }
 }

@@ -18,21 +18,26 @@ class FaceEmbedder(
     init {
 
         val descriptor =
-            context.assets.openFd("mobilefacenet.tflite")
+            context.assets.openFd(
+                "mobilefacenet.tflite"
+            )
 
         FileInputStream(
             descriptor.fileDescriptor
         ).use { input ->
 
-            val channel = input.channel
+            val channel =
+                input.channel
 
-            val buffer = channel.map(
-                FileChannel.MapMode.READ_ONLY,
-                descriptor.startOffset,
-                descriptor.declaredLength
-            )
+            val buffer =
+                channel.map(
+                    FileChannel.MapMode.READ_ONLY,
+                    descriptor.startOffset,
+                    descriptor.declaredLength
+                )
 
-            interpreter = Interpreter(buffer)
+            interpreter =
+                Interpreter(buffer)
         }
     }
 
@@ -48,56 +53,92 @@ class FaceEmbedder(
                 true
             )
 
-        val input = ByteBuffer.allocateDirect(
-            112 * 112 * 3 * 4
-        )
+        try {
 
-        input.order(ByteOrder.nativeOrder())
+            val input =
+                ByteBuffer.allocateDirect(
+                    112 *
+                            112 *
+                            3 *
+                            4
+                )
 
-        val pixels = IntArray(112 * 112)
-
-        resized.getPixels(
-            pixels,
-            0,
-            112,
-            0,
-            0,
-            112,
-            112
-        )
-
-        for (pixel in pixels) {
-
-            val r = (pixel shr 16) and 0xFF
-            val g = (pixel shr 8) and 0xFF
-            val b = pixel and 0xFF
-
-            input.putFloat(
-                (r - 127.5f) / 128f
+            input.order(
+                ByteOrder.nativeOrder()
             )
 
-            input.putFloat(
-                (g - 127.5f) / 128f
+            val pixels =
+                IntArray(
+                    112 * 112
+                )
+
+            resized.getPixels(
+                pixels,
+                0,
+                112,
+                0,
+                0,
+                112,
+                112
             )
 
-            input.putFloat(
-                (b - 127.5f) / 128f
-            )
-        }
+            for (pixel in pixels) {
 
-        input.rewind()
+                val r =
+                    (pixel shr 16) and 0xFF
 
-        val output =
-            Array(1) {
-                FloatArray(192)
+                val g =
+                    (pixel shr 8) and 0xFF
+
+                val b =
+                    pixel and 0xFF
+
+                input.putFloat(
+                    (r - 127.5f) / 128f
+                )
+
+                input.putFloat(
+                    (g - 127.5f) / 128f
+                )
+
+                input.putFloat(
+                    (b - 127.5f) / 128f
+                )
             }
 
-        interpreter.run(
-            input,
-            output
-        )
+            input.rewind()
 
-        return normalize(output[0])
+            /*
+             * IMPORTANT:
+             *
+             * mobilefacenet.tflite in this project
+             * produces [1, 192].
+             *
+             * DO NOT change this to 128.
+             */
+
+            val output =
+                Array(1) {
+                    FloatArray(192)
+                }
+
+            interpreter.run(
+                input,
+                output
+            )
+
+            return normalize(
+                output[0]
+            )
+
+        } finally {
+
+            if (
+                resized !== faceBitmap
+            ) {
+                resized.recycle()
+            }
+        }
     }
 
     private fun normalize(
@@ -107,21 +148,31 @@ class FaceEmbedder(
         var sum = 0f
 
         for (value in vector) {
-            sum += value * value
+
+            sum +=
+                value * value
         }
 
-        val magnitude = sqrt(sum)
+        val magnitude =
+            sqrt(sum)
 
-        if (magnitude == 0f) {
+        if (
+            magnitude == 0f
+        ) {
             return vector
         }
 
-        return FloatArray(vector.size) { index ->
-            vector[index] / magnitude
+        return FloatArray(
+            vector.size
+        ) { index ->
+
+            vector[index] /
+                    magnitude
         }
     }
 
     override fun close() {
+
         interpreter.close()
     }
 }
