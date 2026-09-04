@@ -138,7 +138,7 @@ class VideoProcessor(
                         }
 
                         // Reject excessive looking left/right before expensive operations (crop/align/embedding)
-                        val horizontalAngle = abs(face.headEulerAngleX)
+                        val horizontalAngle = abs(face.headEulerAngleY)
                         if (horizontalAngle > currentSettings.maxHorizontalAngle) {
                             rejectedHorizontalAngle++
                             onLog("  Face $faceIndex rejected: horizontal angle too steep (${format(horizontalAngle)}°)")
