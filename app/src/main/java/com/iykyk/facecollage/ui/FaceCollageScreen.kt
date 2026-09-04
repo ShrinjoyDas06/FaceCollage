@@ -1,27 +1,44 @@
 package com.iykyk.facecollage.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.drawable.ColorDrawable
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -32,7 +49,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +63,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.iykyk.facecollage.AppState
 import com.iykyk.facecollage.FaceCollageViewModel
+import com.iykyk.facecollage.ProcessingOutcome
 import com.iykyk.facecollage.camera.CameraController
 import java.io.File
 import java.io.FileOutputStream
@@ -52,851 +72,414 @@ import java.io.FileOutputStream
 fun FaceCollageScreen(
     viewModel: FaceCollageViewModel = viewModel()
 ) {
-
-    /*
-     * ---------------------------------------------------------
-     * STATE
-     * ---------------------------------------------------------
-     */
-
     val state by viewModel.appState.collectAsState()
     val flipped by viewModel.cameraFlipped.collectAsState()
     val remaining by viewModel.remainingSeconds.collectAsState()
     val progress by viewModel.progress.collectAsState()
     val collage by viewModel.collage.collectAsState()
     val console by viewModel.console.collectAsState()
+    val settings by viewModel.processingSettings.collectAsState()
+    val outcome by viewModel.processingOutcome.collectAsState()
+
+    var showMenu by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var showConsole by remember { mutableStateOf(false) }
+    var showPreview by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
-
-    /*
-     * ---------------------------------------------------------
-     * CAMERA CONTROLLER
-     * ---------------------------------------------------------
-     */
-
-    val cameraController = remember {
-        CameraController(context)
-    }
-
-    /*
-     * Release camera when this screen leaves composition.
-     */
+    val cameraController = remember { CameraController(context) }
 
     DisposableEffect(Unit) {
+        onDispose { cameraController.release() }
+    }
 
-        onDispose {
-            cameraController.release()
+    LaunchedEffect(flipped, state) {
+        if (state != AppState.RECORDING && state != AppState.PROCESSING) {
+            cameraController.bindCamera(flipped)
         }
     }
 
-    /*
-     * Re-bind the camera whenever the user flips it.
-     *
-     * IMPORTANT:
-     * We do not allow camera flipping while recording.
-     */
-
-    LaunchedEffect(flipped) {
-
-        if (state != AppState.RECORDING) {
-
-            cameraController.bindCamera(
-                flipped
-            )
+    LaunchedEffect(outcome) {
+        when (outcome) {
+            ProcessingOutcome.PASSED -> {
+                Toast.makeText(context, "Processing passed", Toast.LENGTH_SHORT).show()
+            }
+            ProcessingOutcome.FAILED ->
+                Toast.makeText(context, "Processing failed", Toast.LENGTH_SHORT).show()
+            ProcessingOutcome.NONE -> Unit
         }
     }
 
-    /*
-     * ---------------------------------------------------------
-     * MAIN UI
-     * ---------------------------------------------------------
-     */
-
-    Surface(
-        modifier = Modifier.fillMaxSize()
-    ) {
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-
-            /*
-             * -------------------------------------------------
-             * TITLE
-             * -------------------------------------------------
-             */
-
-            Text(
-                text = "Face Collage",
-                style = MaterialTheme.typography.headlineSmall
-            )
-
-            Spacer(
-                modifier = Modifier.height(12.dp)
-            )
-
-            /*
-             * =================================================
-             * CAMERA / RESULT AREA
-             * =================================================
-             */
-
-            if (state != AppState.RESULT) {
-
-                /*
-                 * -------------------------------------------------
-                 * CAMERA PREVIEW
-                 * -------------------------------------------------
-                 */
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(320.dp)
-                        .clip(
-                            MaterialTheme.shapes.large
-                        )
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant
-                        )
-                ) {
-
-                    AndroidView(
-
-                        factory = { viewContext ->
-
-                            PreviewView(
-                                viewContext
-                            ).apply {
-
-                                scaleType =
-                                    PreviewView.ScaleType.FILL_CENTER
-
-                                /*
-                                 * Give the PreviewView to the
-                                 * CameraController.
-                                 */
-
-                                cameraController
-                                    .setPreviewView(this)
-
-                                /*
-                                 * Start the camera.
-                                 */
-
-                                cameraController
-                                    .bindCamera(flipped)
-                            }
-                        },
-
-                        modifier =
-                            Modifier.fillMaxSize()
-                    )
-
-                    /*
-                     * -------------------------------------------------
-                     * RECORDING INDICATOR
-                     * -------------------------------------------------
-                     */
-
-                    if (
-                        state ==
-                        AppState.RECORDING
-                    ) {
-
-                        Surface(
-                            modifier = Modifier
-                                .align(
-                                    Alignment.TopCenter
-                                )
-                                .padding(10.dp),
-                            shape =
-                                MaterialTheme.shapes.medium,
-                            color =
-                                MaterialTheme.colorScheme.surface
-                        ) {
-
-                            Text(
-                                text =
-                                    "● REC  ${remaining}s",
-
-                                color =
-                                    MaterialTheme.colorScheme.error,
-
-                                style =
-                                    MaterialTheme.typography
-                                        .titleMedium,
-
-                                modifier =
-                                    Modifier.padding(
-                                        horizontal = 12.dp,
-                                        vertical = 6.dp
-                                    )
-                            )
-                        }
-                    }
-                }
-
-                Spacer(
-                    modifier = Modifier.height(12.dp)
-                )
-
-                /*
-                 * =================================================
-                 * CAMERA CONTROLS
-                 * =================================================
-                 */
-
-                if (
-                    state ==
-                    AppState.RECORDING
-                ) {
-
-                    /*
-                     * ---------------------------------------------
-                     * RECORDING CONTROLS
-                     * ---------------------------------------------
-                     *
-                     * Stop & Process:
-                     *     immediately ends recording and sends the
-                     *     partial video to the face processor.
-                     *
-                     * Cancel:
-                     *     stops recording and discards the video.
-                     *
-                     * We deliberately do NOT show Flip Camera here.
-                     */
-
-                    Row(
-                        modifier =
-                            Modifier.fillMaxWidth(),
-
-                        horizontalArrangement =
-                            Arrangement.spacedBy(12.dp)
-                    ) {
-
-                        Button(
-                            onClick = {
-
-                                /*
-                                 * false = NOT cancelled.
-                                 *
-                                 * CameraController will wait for
-                                 * CameraX Finalize and then call
-                                 * onFinished().
-                                 */
-
-                                cameraController
-                                    .stopRecording(false)
-                            },
-
-                            modifier =
-                                Modifier.weight(1f)
-                        ) {
-
-                            Text(
-                                text = "Stop & Process"
-                            )
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-
-                                /*
-                                 * true = discard recording.
-                                 */
-
-                                cameraController
-                                    .stopRecording(true)
-                            },
-
-                            modifier =
-                                Modifier.weight(1f)
-                        ) {
-
-                            Text(
-                                text = "Cancel"
-                            )
-                        }
-                    }
-
-                } else {
-
-                    /*
-                     * ---------------------------------------------
-                     * NORMAL CAMERA CONTROLS
-                     * ---------------------------------------------
-                     */
-
-                    Row(
-                        modifier =
-                            Modifier.fillMaxWidth(),
-
-                        horizontalArrangement =
-                            Arrangement.spacedBy(12.dp)
-                    ) {
-
-                        /*
-                         * FLIP CAMERA
-                         */
-
-                        OutlinedButton(
-                            onClick = {
-
-                                if (
-                                    state !=
-                                    AppState.RECORDING
-                                ) {
-
-                                    viewModel.flipCamera()
-                                }
-                            },
-
-                            enabled =
-                                state !=
-                                        AppState.RECORDING,
-
-                            modifier =
-                                Modifier.weight(1f)
-                        ) {
-
-                            Text(
-                                text = "Flip Camera"
-                            )
-                        }
-
-                        /*
-                         * CAPTURE
-                         */
-
-                        Button(
-                            onClick = {
-
-                                /*
-                                 * Start recording.
-                                 *
-                                 * IMPORTANT:
-                                 * Processing does NOT start here.
-                                 *
-                                 * It starts only after CameraX
-                                 * finishes writing the video.
-                                 */
-
-                                val file =
-                                    cameraController
-                                        .startRecording(
-
-                                            /*
-                                             * ---------------------
-                                             * Recording started
-                                             * ---------------------
-                                             */
-
-                                            onStarted = {
-
-                                                viewModel.setState(
-                                                    AppState.RECORDING
-                                                )
-
-                                                viewModel.log(
-                                                    "Recording started."
-                                                )
-                                            },
-
-                                            /*
-                                             * ---------------------
-                                             * Countdown
-                                             * ---------------------
-                                             */
-
-                                            onTick = { seconds ->
-
-                                                viewModel
-                                                    .setRemainingSeconds(
-                                                        seconds
-                                                    )
-                                            },
-
-                                            /*
-                                             * ---------------------
-                                             * Recording finished
-                                             * ---------------------
-                                             */
-
-                                            onFinished = {
-                                                    outputFile ->
-
-                                                viewModel
-                                                    .setRemainingSeconds(
-                                                        0
-                                                    )
-
-                                                if (
-                                                    outputFile != null &&
-                                                    outputFile.exists()
-                                                ) {
-
-                                                    viewModel.log(
-                                                        "Recording finished."
-                                                    )
-
-                                                    viewModel.log(
-                                                        "Video: ${outputFile.name}"
-                                                    )
-
-                                                    /*
-                                                     * Now processing
-                                                     * begins.
-                                                     */
-
-                                                    viewModel
-                                                        .processVideo(
-                                                            outputFile
-                                                        )
-
-                                                } else {
-
-                                                    viewModel.setState(
-                                                        AppState.READY
-                                                    )
-
-                                                    viewModel.log(
-                                                        "ERROR: Recording failed."
-                                                    )
-                                                }
-                                            },
-
-                                            /*
-                                             * ---------------------
-                                             * Recording cancelled
-                                             * ---------------------
-                                             */
-
-                                            onCancelled = {
-
-                                                viewModel
-                                                    .setRemainingSeconds(
-                                                        20
-                                                    )
-
-                                                viewModel.setState(
-                                                    AppState.READY
-                                                )
-
-                                                viewModel.log(
-                                                    "Recording cancelled."
-                                                )
-                                            }
-                                        )
-
-                                /*
-                                 * Camera was not ready.
-                                 */
-
-                                if (
-                                    file == null
-                                ) {
-
-                                    viewModel.setState(
-                                        AppState.READY
-                                    )
-
-                                    viewModel.log(
-                                        "ERROR: Camera is not ready."
-                                    )
-                                }
-                            },
-
-                            modifier =
-                                Modifier.weight(1f)
-                        ) {
-
-                            Text(
-                                text = "Capture"
-                            )
-                        }
-                    }
-                }
-
-                Spacer(
-                    modifier = Modifier.height(12.dp)
-                )
-
-                /*
-                 * =================================================
-                 * PROCESSING PROGRESS
-                 * =================================================
-                 */
-
-                if (
-                    state ==
-                    AppState.PROCESSING
-                ) {
-
-                    LinearProgressIndicator(
-                        progress = {
-                            progress / 100f
-                        },
-
-                        modifier =
-                            Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(
-                        modifier = Modifier.height(8.dp)
-                    )
-
-                    Text(
-                        text =
-                            "Processing... $progress%"
-                    )
-
-                } else if (
-                    state ==
-                    AppState.READY
-                ) {
-
-                    /*
-                     * Nothing special while ready.
-                     */
-
-                } else {
-
-                    /*
-                     * Optional small loading indicator for any
-                     * transitional state.
-                     */
-
-                    if (
-                        state !=
-                        AppState.RECORDING
-                    ) {
-
-                        Spacer(
-                            modifier =
-                                Modifier.height(2.dp)
-                        )
-                    }
-                }
-
-            } else {
-
-                /*
-                 * =================================================
-                 * RESULT SCREEN
-                 * =================================================
-                 */
-
-                Text(
-                    text = "Your Face Collage",
-                    style =
-                        MaterialTheme.typography.titleLarge
-                )
-
-                Spacer(
-                    modifier = Modifier.height(10.dp)
-                )
-
-                /*
-                 * Show generated collage.
-                 */
-
-                collage?.let { bitmap ->
-
-                    Image(
-                        bitmap =
-                            bitmap.asImageBitmap(),
-
-                        contentDescription =
-                            "Face collage",
-
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(320.dp)
-                                .clip(
-                                    MaterialTheme.shapes.large
-                                )
-                    )
-
-                } ?: run {
-
-                    /*
-                     * Safety fallback if RESULT state exists
-                     * but bitmap is somehow null.
-                     */
-
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(320.dp),
-
-                        contentAlignment =
-                            Alignment.Center
-                    ) {
-
-                        Text(
-                            text =
-                                "No collage available."
-                        )
-                    }
-                }
-
-                Spacer(
-                    modifier = Modifier.height(12.dp)
-                )
-
-                /*
-                 * -------------------------------------------------
-                 * RESULT BUTTONS
-                 * -------------------------------------------------
-                 */
-
-                Row(
-                    modifier =
-                        Modifier.fillMaxWidth(),
-
-                    horizontalArrangement =
-                        Arrangement.spacedBy(12.dp)
-                ) {
-
-                    /*
-                     * SHARE
-                     */
-
-                    Button(
-                        onClick = {
-
-                            collage?.let { bitmap ->
-
-                                shareBitmap(
-                                    context,
-                                    bitmap
-                                )
-                            }
-                        },
-
-                        enabled =
-                            collage != null,
-
-                        modifier =
-                            Modifier.weight(1f)
-                    ) {
-
-                        Text(
-                            text = "Share"
-                        )
-                    }
-
-                    /*
-                     * CAPTURE AGAIN
-                     */
-
-                    OutlinedButton(
-                        onClick = {
-
-                            viewModel.setState(
-                                AppState.READY
-                            )
-
-                            viewModel.log(
-                                "Ready for another capture."
-                            )
-                        },
-
-                        modifier =
-                            Modifier.weight(1f)
-                    ) {
-
-                        Text(
-                            text = "Capture Again"
-                        )
-                    }
-                }
-            }
-
-            Spacer(
-                modifier = Modifier.height(16.dp)
-            )
-
-            /*
-             * =================================================
-             * CONSOLE
-             * =================================================
-             */
-
-            Text(
-                text = "Console",
-                style =
-                    MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(
-                modifier = Modifier.height(4.dp)
-            )
-
-            Surface(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-
-                color =
-                    MaterialTheme.colorScheme.surfaceVariant,
-
-                shape =
-                    MaterialTheme.shapes.medium
-            ) {
-
-                Column(
-                    modifier =
-                        Modifier.padding(10.dp)
-                ) {
-
-                    /*
-                     * Console log.
-                     */
-
-                    LazyColumn(
-                        modifier =
-                            Modifier.weight(1f)
-                    ) {
-
-                        item {
-
-                            Text(
-                                text = console,
-
-                                style =
-                                    MaterialTheme.typography
-                                        .bodySmall
-                            )
-                        }
-                    }
-
-                    Spacer(
-                        modifier =
-                            Modifier.height(6.dp)
-                    )
-
-                    /*
-                     * CLEAR CONSOLE
-                     */
-
-                    OutlinedButton(
-                        onClick = {
-
-                            viewModel.clearConsole()
-                        },
-
-                        modifier =
-                            Modifier.fillMaxWidth()
-                    ) {
-
-                        Text(
-                            text = "Clear Console"
-                        )
-                    }
-                }
-            }
+    BackHandler(enabled = showPreview || showSettings || showConsole) {
+        when {
+            showPreview -> showPreview = false
+            showSettings -> showSettings = false
+            showConsole -> showConsole = false
         }
     }
-}
 
-
-/*
- * =============================================================
- * SHARE COLLAGE
- * =============================================================
- *
- * Saves the generated bitmap into cache and shares it through
- * Android FileProvider.
- *
- * Your AndroidManifest.xml and file_paths.xml must contain the
- * FileProvider configuration for this to work.
- */
-
-private fun shareBitmap(
-    context: Context,
-    bitmap: Bitmap
-) {
-
-    try {
-
-        /*
-         * Create temporary PNG file.
-         */
-
-        val file =
-            File(
-                context.cacheDir,
-                "face_collage.png"
-            )
-
-        FileOutputStream(
-            file
-        ).use { output ->
-
-            bitmap.compress(
-                Bitmap.CompressFormat.PNG,
-                100,
-                output
-            )
-        }
-
-        /*
-         * Convert local file into content:// URI.
-         */
-
-        val uri: Uri =
-            FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.provider",
-                file
-            )
-
-        /*
-         * Create share intent.
-         */
-
-        val shareIntent =
-            Intent(
-                Intent.ACTION_SEND
-            ).apply {
-
-                type =
-                    "image/png"
-
-                putExtra(
-                    Intent.EXTRA_STREAM,
-                    uri
-                )
-
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            }
-
-        /*
-         * Open Android's share sheet.
-         */
-
-        context.startActivity(
-            Intent.createChooser(
-                shareIntent,
-                "Share Face Collage"
-            )
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { viewContext ->
+                PreviewView(viewContext).apply {
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    cameraController.setPreviewView(this)
+                    cameraController.bindCamera(flipped)
+                }
+            },
+            modifier = Modifier.fillMaxSize()
         )
 
-    } catch (e: Exception) {
+        if (state == AppState.PROCESSING) {
+            LinearProgressIndicator(
+                progress = { progress / 100f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+            )
+        }
 
-        /*
-         * Do not crash the application if sharing fails.
-         */
+        // Top controls deliberately sit over the camera but inside safe drawing insets.
+        if (state != AppState.RECORDING && state != AppState.PROCESSING) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                IconButton(onClick = { viewModel.flipCamera() }) {
+                    Text("↻", style = MaterialTheme.typography.headlineSmall)
+                }
 
-        e.printStackTrace()
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Text("⋮", style = MaterialTheme.typography.headlineSmall)
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Console") },
+                            onClick = {
+                                showMenu = false
+                                showConsole = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            onClick = {
+                                showMenu = false
+                                showSettings = true
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        if (state == AppState.RECORDING) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(top = 8.dp),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
+            ) {
+                Text(
+                    text = "● REC  ${remaining}s",
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+
+        // Last generated collage thumbnail.
+        if (collage != null && state != AppState.RECORDING && state != AppState.PROCESSING) {
+            Image(
+                bitmap = collage!!.asImageBitmap(),
+                contentDescription = "Last collage",
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, bottom = 18.dp)
+                    .size(64.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickableNoRipple { showPreview = true }
+            )
+        }
+
+        if (state != AppState.PROCESSING && state != AppState.RESULT) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 18.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (state == AppState.RECORDING) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        RoundIconButton(
+                            symbol = "■",
+                            contentDescription = "Stop and process",
+                            onClick = { cameraController.stopRecording(false) },
+                            containerSize = 76.dp
+                        )
+                        RoundIconButton(
+                            symbol = "×",
+                            contentDescription = "Cancel recording",
+                            onClick = { cameraController.stopRecording(true) },
+                            containerSize = 56.dp
+                        )
+                    }
+                } else {
+                    RoundIconButton(
+                        symbol = "▶",
+                        contentDescription = "Start recording",
+                        onClick = {
+                            val file = cameraController.startRecording(
+                                onStarted = {
+                                    viewModel.setState(AppState.RECORDING)
+                                    viewModel.log("Recording started.")
+                                },
+                                onTick = { viewModel.setRemainingSeconds(it) },
+                                onFinished = { outputFile ->
+                                    viewModel.setRemainingSeconds(0)
+                                    if (outputFile != null && outputFile.exists()) {
+                                        viewModel.log("Recording finished.")
+                                        viewModel.log("Video: ${outputFile.name}")
+                                        viewModel.processVideo(outputFile)
+                                    } else {
+                                        viewModel.setState(AppState.READY)
+                                        viewModel.log("ERROR: Recording failed.")
+                                    }
+                                },
+                                onCancelled = {
+                                    viewModel.setRemainingSeconds(20)
+                                    viewModel.setState(AppState.READY)
+                                    viewModel.log("Recording cancelled.")
+                                }
+                            )
+                            if (file == null) {
+                                viewModel.setState(AppState.READY)
+                                viewModel.log("ERROR: Camera is not ready.")
+                            }
+                        },
+                        containerSize = 82.dp
+                    )
+                }
+            }
+        }
+
+        if (state == AppState.PROCESSING) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 22.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
+            ) {
+                Text(
+                    "Processing… $progress%",
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                )
+            }
+        }
+    }
+
+    if (showSettings) {
+        FaceProcessingSettingsDialog(
+            initialSettings = settings,
+            onApply = { newSettings ->
+                viewModel.updateProcessingSettings(newSettings)
+                viewModel.log("Face processing settings updated.")
+            },
+            onDismiss = { showSettings = false }
+        )
+    }
+
+    if (showConsole) {
+        ConsoleDialog(
+            console = console,
+            onClear = { viewModel.clearConsole() },
+            onCopy = { copyToClipboard(context, console) },
+            onDismiss = { showConsole = false }
+        )
+    }
+
+    if (showPreview && collage != null) {
+        CollagePreviewDialog(
+            bitmap = collage!!,
+            onSave = {
+                val saved = saveBitmapToGallery(context, collage!!)
+                Toast.makeText(
+                    context,
+                    if (saved != null) "Collage saved" else "Unable to save collage",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            onShare = { shareBitmap(context, collage!!) },
+            onDismiss = { showPreview = false }
+        )
     }
 }
+
+@Composable
+private fun RoundIconButton(
+    symbol: String,
+    contentDescription: String,
+    onClick: () -> Unit,
+    containerSize: androidx.compose.ui.unit.Dp
+) {
+    Surface(
+        modifier = Modifier
+            .size(containerSize)
+            .clip(CircleShape)
+            .clickableNoRipple(onClick),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        tonalElevation = 4.dp
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(symbol, style = MaterialTheme.typography.headlineSmall)
+        }
+    }
+}
+
+@Composable
+private fun ConsoleDialog(
+    console: String,
+    onClear: () -> Unit,
+    onCopy: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Console", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = onDismiss) { Text("Close") }
+                }
+                Spacer(Modifier.height(12.dp))
+                Surface(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    LazyColumn(modifier = Modifier.padding(12.dp)) {
+                        item { Text(console, style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = onCopy, modifier = Modifier.weight(1f)) { Text("Copy") }
+                    Button(onClick = onClear, modifier = Modifier.weight(1f)) { Text("Clear") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollagePreviewDialog(
+    bitmap: Bitmap,
+    onSave: () -> Unit,
+    onShare: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Your Face Collage", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = onDismiss) { Text("Close") }
+                }
+                Spacer(Modifier.height(14.dp))
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Face collage",
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                )
+                Spacer(Modifier.height(14.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onSave, modifier = Modifier.weight(1f)) { Text("Save") }
+                    OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f)) { Text("Share") }
+                }
+            }
+        }
+    }
+}
+
+private fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("Face Collage Console", text))
+    Toast.makeText(context, "Console copied", Toast.LENGTH_SHORT).show()
+}
+
+private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri? {
+    val resolver = context.contentResolver
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, "face_collage_${System.currentTimeMillis()}.png")
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/FaceCollage")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+    }
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
+    return try {
+        resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+        }
+        uri
+    } catch (e: Exception) {
+        resolver.delete(uri, null, null)
+        null
+    }
+}
+
+private fun shareBitmap(context: Context, bitmap: Bitmap) {
+    try {
+        val file = File(context.cacheDir, "face_collage.png")
+        FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "image/png"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share collage"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Unable to share collage", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.clickable(onClick = onClick)

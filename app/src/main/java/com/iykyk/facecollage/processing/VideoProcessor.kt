@@ -16,310 +16,168 @@ class VideoProcessor(
     private val context: Context
 ) : AutoCloseable {
 
-    private val embedder =
-        FaceEmbedder(context)
-
-    private val detector =
-        FaceDetection.getClient(
-            FaceDetectorOptions.Builder()
-                .setPerformanceMode(
-                    FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE
-                )
-                .setLandmarkMode(
-                    FaceDetectorOptions.LANDMARK_MODE_ALL
-                )
-                .setClassificationMode(
-                    FaceDetectorOptions.CLASSIFICATION_MODE_ALL
-                )
-                .enableTracking()
-                .setMinFaceSize(0.08f)
-                .build()
-        )
+    private val embedder = FaceEmbedder(context)
 
     suspend fun processVideo(
         file: File,
+        settings: FaceProcessingSettings = FaceProcessingSettings(),
         onProgress: (Int) -> Unit,
         onLog: (String) -> Unit
     ): Bitmap = withContext(Dispatchers.Default) {
-
-        val retriever =
-            MediaMetadataRetriever()
+        val currentSettings = settings.normalized()
+        val detector = createDetector(currentSettings)
+        val retriever = MediaMetadataRetriever()
 
         try {
-
             if (!file.exists()) {
                 throw IllegalArgumentException(
                     "Video file does not exist: ${file.absolutePath}"
                 )
             }
 
-            retriever.setDataSource(
-                file.absolutePath
-            )
+            retriever.setDataSource(file.absolutePath)
 
             val durationMs =
-                retriever
-                    .extractMetadata(
-                        MediaMetadataRetriever.METADATA_KEY_DURATION
-                    )
-                    ?.toLong()
-                    ?: 0L
+                retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_DURATION
+                )?.toLong() ?: 0L
 
             if (durationMs <= 0L) {
-                throw IllegalStateException(
-                    "Could not determine video duration."
-                )
+                throw IllegalStateException("Could not determine video duration.")
             }
 
-            onLog(
-                "Video duration: ${durationMs}ms"
-            )
+            val intervalUs = 1_000_000L / currentSettings.samplingFps
+            val frameTimes = (0L until durationMs * 1000L step intervalUs).toList()
 
-            /*
-             * Sample approximately 3 frames per second.
-             *
-             * 20 second video ≈ 60 frames.
-             *
-             * This gives us enough appearances of each person
-             * to recognise the same person repeatedly.
-             */
+            onLog("Video duration: ${durationMs}ms")
+            onLog("Sampling ${frameTimes.size} frames (${currentSettings.samplingFps} FPS).")
+            onLog("Settings: area >= ${format(currentSettings.minFaceAreaPercent)}%, " +
+                    "edge margin ${format(currentSettings.edgeMarginPercent)}%, " +
+                    "sharpness >= ${format(currentSettings.minSharpness)}, " +
+                    "similarity >= ${format(currentSettings.similarityThreshold)}")
 
-            val intervalUs =
-                333_333L
-
-            val frameTimes =
-                (0L until durationMs * 1000L step intervalUs)
-                    .toList()
-
-            onLog(
-                "Sampling ${frameTimes.size} frames."
-            )
-
-            val detectedFaces =
-                mutableListOf<FaceSample>()
-
+            val detectedFaces = mutableListOf<FaceSample>()
             var totalRawFaces = 0
             var rejectedSmall = 0
             var rejectedEdge = 0
             var rejectedQuality = 0
+            var rejectedInvalid = 0
+            var alignedFaces = 0
+            var fallbackFaces = 0
 
-            for (
-                (index, timeUs)
-                in frameTimes.withIndex()
-            ) {
-
-                val frame =
-                    retriever.getFrameAtTime(
-                        timeUs,
-                        MediaMetadataRetriever
-                            .OPTION_CLOSEST
-                    )
+            for ((index, timeUs) in frameTimes.withIndex()) {
+                val frame = retriever.getFrameAtTime(
+                    timeUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST
+                )
 
                 if (frame == null) {
-
-                    onLog(
-                        "Frame $index: unavailable"
-                    )
-
+                    onLog("Frame $index: unavailable")
                     continue
                 }
 
                 try {
-
-                    val image =
-                        InputImage.fromBitmap(
-                            frame,
-                            0
-                        )
-
-                    val faces =
-                        Tasks.await(
-                            detector.process(image)
-                        )
-
-                    totalRawFaces += faces.size
-
-                    onLog(
-                        "Frame $index: ${faces.size} face(s)"
+                    val faces = Tasks.await(
+                        detector.process(InputImage.fromBitmap(frame, 0))
                     )
 
-                    for (
-                        (faceIndex, face)
-                        in faces.withIndex()
-                    ) {
+                    totalRawFaces += faces.size
+                    onLog("Frame $index: ${faces.size} face(s)")
 
-                        val bounds =
-                            face.boundingBox
+                    for ((faceIndex, face) in faces.withIndex()) {
+                        val bounds = face.boundingBox
+                        val left = bounds.left.coerceAtLeast(0)
+                        val top = bounds.top.coerceAtLeast(0)
+                        val right = bounds.right.coerceAtMost(frame.width)
+                        val bottom = bounds.bottom.coerceAtMost(frame.height)
+                        val width = right - left
+                        val height = bottom - top
 
-                        val left =
-                            bounds.left
-                                .coerceAtLeast(0)
-
-                        val top =
-                            bounds.top
-                                .coerceAtLeast(0)
-
-                        val right =
-                            bounds.right
-                                .coerceAtMost(
-                                    frame.width
-                                )
-
-                        val bottom =
-                            bounds.bottom
-                                .coerceAtMost(
-                                    frame.height
-                                )
-
-                        val width =
-                            right - left
-
-                        val height =
-                            bottom - top
-
-                        if (
-                            width <= 0 ||
-                            height <= 0
-                        ) {
+                        if (width <= 1 || height <= 1) {
+                            rejectedInvalid++
                             continue
                         }
 
-                        val area =
-                            width * height
+                        val area = width * height
+                        val frameArea = frame.width * frame.height
+                        val relativeArea = area.toFloat() / frameArea.toFloat()
+                        val areaPercent = relativeArea * 100f
 
-                        val frameArea =
-                            frame.width *
-                                    frame.height
-
-                        val relativeArea =
-                            area.toFloat() /
-                                    frameArea.toFloat()
-
-                        /*
-                         * Reject extremely tiny faces.
-                         *
-                         * This is one of the main protections
-                         * against background faces.
-                         */
-
-                        if (
-                            relativeArea < 0.008f
-                        ) {
-
+                        if (areaPercent < currentSettings.minFaceAreaPercent) {
                             rejectedSmall++
-
-                            onLog(
-                                "  Face $faceIndex rejected: too small (${(relativeArea * 100).toInt()}%)"
-                            )
-
+                            onLog("  Face $faceIndex rejected: too small (${format(areaPercent)}%)")
                             continue
                         }
 
-                        /*
-                         * Reject faces touching the extreme
-                         * edges of the frame.
-                         *
-                         * These are often partial/background faces.
-                         */
+                        val edgeMarginX = frame.width * currentSettings.edgeMarginPercent / 100f
+                        val edgeMarginY = frame.height * currentSettings.edgeMarginPercent / 100f
+                        val tooCloseToEdge =
+                            currentSettings.edgeMarginPercent > 0f &&
+                                    (bounds.left <= edgeMarginX ||
+                                            bounds.top <= edgeMarginY ||
+                                            bounds.right >= frame.width - edgeMarginX ||
+                                            bounds.bottom >= frame.height - edgeMarginY)
 
-                        val edgeMarginX =
-                            frame.width * 0.01f
-
-                        val edgeMarginY =
-                            frame.height * 0.01f
-
-                        if (
-                            bounds.left <= edgeMarginX ||
-                            bounds.top <= edgeMarginY ||
-                            bounds.right >=
-                            frame.width - edgeMarginX ||
-                            bounds.bottom >=
-                            frame.height - edgeMarginY
-                        ) {
-
+                        if (tooCloseToEdge) {
                             rejectedEdge++
-
-                            onLog(
-                                "  Face $faceIndex rejected: too close to edge"
-                            )
-
+                            onLog("  Face $faceIndex rejected: too close to edge")
                             continue
                         }
 
-                        val crop =
-                            Bitmap.createBitmap(
-                                frame,
-                                left,
-                                top,
-                                width,
-                                height
-                            )
+                        val cropForQuality = Bitmap.createBitmap(
+                            frame,
+                            left,
+                            top,
+                            width,
+                            height
+                        )
 
-                        /*
-                         * Calculate image quality BEFORE embedding.
-                         */
+                        val sharpness = try {
+                            FaceQuality.calculateSharpness(cropForQuality)
+                        } finally {
+                            cropForQuality.recycle()
+                        }
 
-                        val sharpness =
-                            FaceQuality.calculateSharpness(
-                                crop
-                            )
-
-                        /*
-                         * Reject extremely blurry faces.
-                         *
-                         * We keep the threshold relatively low
-                         * because phone cameras can produce
-                         * different sharpness values.
-                         */
-
-                        if (
-                            sharpness < 25f
-                        ) {
-
+                        // Quality is now an optional cutoff, defaulting to 0.
+                        // Even without this cutoff, sharpness is still used later
+                        // to choose the best representative frame.
+                        if (sharpness < currentSettings.minSharpness) {
                             rejectedQuality++
-
-                            onLog(
-                                "  Face $faceIndex rejected: blurry (${
-                                    sharpness.toInt()
-                                })"
-                            )
-
-                            crop.recycle()
-
+                            onLog("  Face $faceIndex rejected: low sharpness (${format(sharpness)})")
                             continue
                         }
 
-                        /*
-                         * Generate MobileFaceNet embedding.
-                         *
-                         * Your model outputs 192 dimensions.
-                         */
+                        val aligned = FaceAlignment.align(frame, face, currentSettings)
+                        if (aligned == null) {
+                            rejectedInvalid++
+                            onLog("  Face $faceIndex rejected: alignment failed")
+                            continue
+                        }
 
-                        val embedding =
-                            embedder.getEmbedding(
-                                crop
-                            )
+                        val landmarksPresent =
+                            face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.LEFT_EYE) != null &&
+                                    face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.RIGHT_EYE) != null &&
+                                    face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.NOSE_BASE) != null
 
-                        val centerX =
-                            bounds.centerX().toFloat()
+                        if (landmarksPresent) alignedFaces++ else fallbackFaces++
 
-                        val centerY =
-                            bounds.centerY().toFloat()
-
-                        val trackingId =
-                            face.trackingId
+                        val embedding = try {
+                            embedder.getEmbedding(aligned)
+                        } catch (e: Exception) {
+                            aligned.recycle()
+                            throw e
+                        }
 
                         onLog(
-                            "  Face $faceIndex accepted: " +
-                                    "size=${(relativeArea * 100).toInt()}%, " +
-                                    "sharp=${sharpness.toInt()}, " +
-                                    "yaw=${face.headEulerAngleY.toInt()}, " +
-                                    "track=$trackingId"
+                            "  Face $faceIndex accepted: size=${format(areaPercent)}%, " +
+                                    "sharp=${format(sharpness)}, yaw=${face.headEulerAngleY.toInt()}, " +
+                                    "track=${face.trackingId}, " +
+                                    "${if (landmarksPresent) "aligned" else "fallback"}"
                         )
 
                         detectedFaces.add(
                             FaceSample(
-                                bitmap = crop,
+                                bitmap = aligned,
                                 area = area,
                                 frameWidth = frame.width,
                                 frameHeight = frame.height,
@@ -328,132 +186,79 @@ class VideoProcessor(
                                 pitch = face.headEulerAngleX,
                                 roll = face.headEulerAngleZ,
                                 sharpness = sharpness,
-                                centerX = centerX,
-                                centerY = centerY,
+                                centerX = bounds.centerX().toFloat(),
+                                centerY = bounds.centerY().toFloat(),
                                 timestampUs = timeUs,
-                                leftEyeOpen =
-                                    face.leftEyeOpenProbability,
-                                rightEyeOpen =
-                                    face.rightEyeOpenProbability
+                                leftEyeOpen = face.leftEyeOpenProbability,
+                                rightEyeOpen = face.rightEyeOpenProbability
                             )
                         )
                     }
-
                 } finally {
-
                     frame.recycle()
                 }
 
                 onProgress(
-                    ((index + 1) * 75) /
-                            frameTimes.size
+                    if (frameTimes.isEmpty()) 0
+                    else ((index + 1) * 75) / frameTimes.size
                 )
             }
 
-            onLog(
-                "Raw detected faces: $totalRawFaces"
-            )
-
-            onLog(
-                "Rejected tiny faces: $rejectedSmall"
-            )
-
-            onLog(
-                "Rejected edge faces: $rejectedEdge"
-            )
-
-            onLog(
-                "Rejected blurry faces: $rejectedQuality"
-            )
-
-            onLog(
-                "Usable face samples: ${detectedFaces.size}"
-            )
+            onLog("Raw detected faces: $totalRawFaces")
+            onLog("Rejected tiny faces: $rejectedSmall")
+            onLog("Rejected edge faces: $rejectedEdge")
+            onLog("Rejected blurry/low-quality faces: $rejectedQuality")
+            onLog("Rejected invalid/alignment faces: $rejectedInvalid")
+            onLog("Aligned samples: $alignedFaces; fallback crops: $fallbackFaces")
+            onLog("Usable face samples: ${detectedFaces.size}")
 
             if (detectedFaces.isEmpty()) {
-
-                throw IllegalStateException(
-                    "No usable faces were detected in the video."
-                )
+                throw IllegalStateException("No usable faces were detected in the video.")
             }
 
             onProgress(80)
+            onLog("Recognising repeated people...")
 
-            /*
-             * Now comes the important part:
-             *
-             * ALL appearances of the same person are grouped
-             * into ONE PersonCluster.
-             */
-
-            onLog(
-                "Recognising repeated people..."
-            )
-
-            val uniqueFaces =
-                FaceClusterer(
-                    similarityThreshold = 0.65f
-                ).clusterFaces(
-                    detectedFaces
-                )
-
-            onLog(
-                "Unique people: ${uniqueFaces.size}"
-            )
-
-            /*
-             * This is the actual desired behaviour:
-             *
-             * If you appear 20 times,
-             * only ONE of your best frames goes to the collage.
-             */
-
-            onLog(
-                "Selecting one best frame per person..."
-            )
+            val uniqueFaces = FaceClusterer(currentSettings).clusterFaces(detectedFaces)
+            onLog("Unique people: ${uniqueFaces.size}")
+            onLog("Selecting one best frame per person...")
 
             uniqueFaces.forEachIndexed { index, _ ->
-
-                onLog(
-                    "Person ${index + 1}: best frame selected"
-                )
+                onLog("Person ${index + 1}: best frame selected")
             }
 
             onProgress(90)
 
             if (uniqueFaces.isEmpty()) {
-
-                throw IllegalStateException(
-                    "No unique people could be identified."
-                )
+                throw IllegalStateException("No unique people could be identified.")
             }
 
-            onLog(
-                "Generating collage from ${uniqueFaces.size} people..."
-            )
-
-            val collage =
-                CollageBuilder.createGridCollage(
-                    uniqueFaces
-                )
-
+            onLog("Building collage...")
+            val collage = CollageBuilder.createGridCollage(uniqueFaces)
             onProgress(100)
-
-            onLog(
-                "Collage contains ${uniqueFaces.size} unique people."
-            )
-
+            onLog("Collage complete.")
             collage
-
         } finally {
-
+            detector.close()
             retriever.release()
         }
     }
 
-    override fun close() {
+    private fun createDetector(settings: FaceProcessingSettings) =
+        FaceDetection.getClient(
+            FaceDetectorOptions.Builder()
+                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+                .enableTracking()
+                .setMinFaceSize(settings.minDetectorFaceSize)
+                .build()
+        )
 
-        detector.close()
+    private fun format(value: Float): String =
+        "%.2f".format(java.util.Locale.US, value)
+
+    override fun close() {
         embedder.close()
     }
 }

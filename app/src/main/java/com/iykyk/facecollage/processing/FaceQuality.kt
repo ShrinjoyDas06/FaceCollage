@@ -135,25 +135,26 @@ object FaceQuality {
     fun angleScore(
         yaw: Float,
         pitch: Float,
-        roll: Float
+        roll: Float,
+        settings: FaceProcessingSettings = FaceProcessingSettings()
     ): Float {
 
         val yawScore =
             1f -
                     (
-                            abs(yaw) / 45f
+                            abs(yaw) / settings.maxYawForScore
                             ).coerceIn(0f, 1f)
 
         val pitchScore =
             1f -
                     (
-                            abs(pitch) / 35f
+                            abs(pitch) / settings.maxPitchForScore
                             ).coerceIn(0f, 1f)
 
         val rollScore =
             1f -
                     (
-                            abs(roll) / 45f
+                            abs(roll) / settings.maxRollForScore
                             ).coerceIn(0f, 1f)
 
         return (

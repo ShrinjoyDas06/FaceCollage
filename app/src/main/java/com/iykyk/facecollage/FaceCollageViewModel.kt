@@ -4,6 +4,8 @@ import android.app.Application
 import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.iykyk.facecollage.processing.FaceProcessingPreset
+import com.iykyk.facecollage.processing.FaceProcessingSettings
 import com.iykyk.facecollage.processing.VideoProcessor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +18,12 @@ enum class AppState {
     RECORDING,
     PROCESSING,
     RESULT
+}
+
+enum class ProcessingOutcome {
+    NONE,
+    PASSED,
+    FAILED
 }
 
 class FaceCollageViewModel(
@@ -31,6 +39,9 @@ class FaceCollageViewModel(
     private val _remainingSeconds = MutableStateFlow(20)
     val remainingSeconds: StateFlow<Int> = _remainingSeconds.asStateFlow()
 
+    private val _processingOutcome = MutableStateFlow(ProcessingOutcome.NONE)
+    val processingOutcome: StateFlow<ProcessingOutcome> = _processingOutcome.asStateFlow()
+
     private val _progress = MutableStateFlow(0)
     val progress: StateFlow<Int> = _progress.asStateFlow()
 
@@ -39,12 +50,27 @@ class FaceCollageViewModel(
 
     private val _console = MutableStateFlow(
         "Face Collage Console\n" +
-        "---------------------\n" +
-        "Ready."
+                "---------------------\n" +
+                "Ready."
     )
     val console: StateFlow<String> = _console.asStateFlow()
 
+    private val _processingSettings = MutableStateFlow(
+        FaceProcessingSettings.preset(FaceProcessingPreset.AGGRESSIVE)
+    )
+    val processingSettings: StateFlow<FaceProcessingSettings> =
+        _processingSettings.asStateFlow()
+
     private val processor = VideoProcessor(application)
+
+    fun updateProcessingSettings(settings: FaceProcessingSettings) {
+        _processingSettings.value = settings
+    }
+
+    fun applyPreset(preset: FaceProcessingPreset) {
+        _processingSettings.value = FaceProcessingSettings.preset(preset)
+        log("Processing preset: ${presetLabel(preset)}")
+    }
 
     fun log(message: String) {
         _console.value += "\n$message"
@@ -74,7 +100,12 @@ class FaceCollageViewModel(
 
     fun processVideo(file: File) {
         _appState.value = AppState.PROCESSING
+        _processingOutcome.value = ProcessingOutcome.NONE
         _progress.value = 0
+
+        // Freeze the settings for this processing run. Slider changes made while
+        // processing cannot mutate the detector/clustering configuration midway.
+        val settingsForRun = _processingSettings.value.normalized()
 
         viewModelScope.launch {
             try {
@@ -82,6 +113,7 @@ class FaceCollageViewModel(
 
                 val result = processor.processVideo(
                     file = file,
+                    settings = settingsForRun,
                     onProgress = { progress ->
                         _progress.value = progress
                     },
@@ -91,22 +123,40 @@ class FaceCollageViewModel(
                 )
 
                 _collage.value = result
-
-                log("Processing completed.")
-                log("Collage generated successfully.")
-
-                _appState.value = AppState.RESULT
-
+                _processingOutcome.value = ProcessingOutcome.PASSED
+                _appState.value = AppState.READY
+                log("Processing complete. Faces successfully processed.")
             } catch (e: Exception) {
                 log("ERROR: ${e.javaClass.simpleName}")
                 log("ERROR: ${e.message ?: "Unknown error"}")
+                _processingOutcome.value = ProcessingOutcome.FAILED
                 _appState.value = AppState.READY
             }
         }
     }
 
+    fun resetResult() {
+        val oldCollage = _collage.value
+        _collage.value = null
+        oldCollage?.recycleIfSafe()
+        _progress.value = 0
+        _processingOutcome.value = ProcessingOutcome.NONE
+        _appState.value = AppState.READY
+    }
+
     override fun onCleared() {
         processor.close()
+        _collage.value?.recycleIfSafe()
         super.onCleared()
+    }
+
+    private fun presetLabel(preset: FaceProcessingPreset): String = when (preset) {
+        FaceProcessingPreset.NORMAL -> "Normal"
+        FaceProcessingPreset.AGGRESSIVE -> "Aggressive"
+        FaceProcessingPreset.LENIENT -> "Lenient"
+    }
+
+    private fun Bitmap.recycleIfSafe() {
+        if (!isRecycled) recycle()
     }
 }
