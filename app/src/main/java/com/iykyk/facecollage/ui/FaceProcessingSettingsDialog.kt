@@ -190,6 +190,24 @@ fun FaceProcessingSettingsDialog(
                 )
 
                 SettingSlider(
+                    label = "Maximum Left/Right Angle",
+                    valueText = format(settings.maxHorizontalAngle),
+                    value = settings.maxHorizontalAngle,
+                    range =  5f..60f,
+                    steps = 10,
+                    onValueChange = { settings = settings.copy(maxHorizontalAngle = it) }
+                )
+
+                SettingSlider(
+                    label = "Maximum Up/Down Angle",
+                    valueText = format(settings.maxVerticalAngle),
+                    value = settings.maxVerticalAngle,
+                    range =  5f..45f,
+                    steps = 7,
+                    onValueChange = { settings = settings.copy(maxVerticalAngle = it) }
+                )
+
+                SettingSlider(
                     label = "Representative face size target",
                     valueText = "${format(settings.bestFrameSizeTargetPercent)}% of frame",
                     value = settings.bestFrameSizeTargetPercent,

@@ -11,6 +11,7 @@ import com.iykyk.facecollage.CollageBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.abs
 
 class VideoProcessor(
     private val context: Context
@@ -53,6 +54,8 @@ class VideoProcessor(
             onLog("Sampling ${frameTimes.size} frames (${currentSettings.samplingFps} FPS).")
             onLog("Settings: area >= ${format(currentSettings.minFaceAreaPercent)}%, " +
                     "edge margin ${format(currentSettings.edgeMarginPercent)}%, " +
+                    "max vertical angle ${format(currentSettings.maxVerticalAngle)}°, " +
+                    "max horizontal angle ${format(currentSettings.maxHorizontalAngle)}°, " +
                     "sharpness >= ${format(currentSettings.minSharpness)}, " +
                     "similarity >= ${format(currentSettings.similarityThreshold)}")
 
@@ -60,6 +63,8 @@ class VideoProcessor(
             var totalRawFaces = 0
             var rejectedSmall = 0
             var rejectedEdge = 0
+            var rejectedVerticalAngle = 0
+            var rejectedHorizontalAngle = 0
             var rejectedQuality = 0
             var rejectedInvalid = 0
             var alignedFaces = 0
@@ -124,6 +129,22 @@ class VideoProcessor(
                             continue
                         }
 
+                        // Reject excessive looking up/down before expensive operations (crop/align/embedding)
+                        val verticalAngle = abs(face.headEulerAngleX)
+                        if (verticalAngle > currentSettings.maxVerticalAngle) {
+                            rejectedVerticalAngle++
+                            onLog("  Face $faceIndex rejected: vertical angle too steep (${format(verticalAngle)}°)")
+                            continue
+                        }
+
+                        // Reject excessive looking left/right before expensive operations (crop/align/embedding)
+                        val horizontalAngle = abs(face.headEulerAngleX)
+                        if (horizontalAngle > currentSettings.maxHorizontalAngle) {
+                            rejectedHorizontalAngle++
+                            onLog("  Face $faceIndex rejected: horizontal angle too steep (${format(horizontalAngle)}°)")
+                            continue
+                        }
+
                         val cropForQuality = Bitmap.createBitmap(
                             frame,
                             left,
@@ -171,8 +192,9 @@ class VideoProcessor(
                         onLog(
                             "  Face $faceIndex accepted: size=${format(areaPercent)}%, " +
                                     "sharp=${format(sharpness)}, yaw=${face.headEulerAngleY.toInt()}, " +
+                                    "pitch=${face.headEulerAngleX.toInt()}, " +
                                     "track=${face.trackingId}, " +
-                                    "${if (landmarksPresent) "aligned" else "fallback"}"
+                                    if (landmarksPresent) "aligned" else "fallback"
                         )
 
                         detectedFaces.add(
@@ -207,6 +229,8 @@ class VideoProcessor(
             onLog("Raw detected faces: $totalRawFaces")
             onLog("Rejected tiny faces: $rejectedSmall")
             onLog("Rejected edge faces: $rejectedEdge")
+            onLog("Rejected extreme vertical angle faces: $rejectedVerticalAngle")
+            onLog("Rejected extreme horizontal angle faces: $rejectedHorizontalAngle")
             onLog("Rejected blurry/low-quality faces: $rejectedQuality")
             onLog("Rejected invalid/alignment faces: $rejectedInvalid")
             onLog("Aligned samples: $alignedFaces; fallback crops: $fallbackFaces")

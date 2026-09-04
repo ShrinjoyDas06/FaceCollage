@@ -8,6 +8,8 @@ data class FaceProcessingSettings(
     val edgeMarginPercent: Float = 0.0f,
     val minSharpness: Float = 0f,
     val similarityThreshold: Float = 0.58f,
+    val maxVerticalAngle: Float = 25f,
+    val maxHorizontalAngle: Float = 30f,
     val maxYawForScore: Float = 45f,
     val maxPitchForScore: Float = 35f,
     val maxRollForScore: Float = 45f,
@@ -26,7 +28,7 @@ data class FaceProcessingSettings(
     val eyeWeight: Float = 0.10f,
     val clusterAppearanceWeight: Float = 0.30f,
     val clusterSizeWeight: Float = 0.40f,
-    val clusterSharpnessWeight: Float = 0.30f
+    val clusterSharpnessWeight: Float = 0.30f,
 ) {
     fun normalized(): FaceProcessingSettings {
         val sum = sizeWeight + sharpnessWeight + angleWeight + centerWeight + eyeWeight
@@ -64,7 +66,9 @@ data class FaceProcessingSettings(
                 minFaceAreaPercent = 0.60f,
                 edgeMarginPercent = 0.5f,
                 minSharpness = 19f,
-                similarityThreshold = 0.63f
+                similarityThreshold = 0.63f,
+                maxVerticalAngle = 20f,
+                maxHorizontalAngle = 25f,
             )
             FaceProcessingPreset.LENIENT -> FaceProcessingSettings(
                 samplingFps = 4,
@@ -72,7 +76,9 @@ data class FaceProcessingSettings(
                 minFaceAreaPercent = 0.15f,
                 edgeMarginPercent = 0f,
                 minSharpness = 0f,
-                similarityThreshold = 0.54f
+                similarityThreshold = 0.54f,
+                maxVerticalAngle = 35f,
+                maxHorizontalAngle = 45f,
             )
         }
     }
