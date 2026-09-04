@@ -15,6 +15,7 @@ import androidx.activity.compose.BackHandler
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +40,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -55,8 +57,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
@@ -67,6 +71,13 @@ import com.iykyk.facecollage.ProcessingOutcome
 import com.iykyk.facecollage.camera.CameraController
 import java.io.File
 import java.io.FileOutputStream
+
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.TextStyle
 
 @Composable
 fun FaceCollageScreen(
@@ -104,8 +115,10 @@ fun FaceCollageScreen(
             ProcessingOutcome.PASSED -> {
                 Toast.makeText(context, "Processing passed", Toast.LENGTH_SHORT).show()
             }
+
             ProcessingOutcome.FAILED ->
                 Toast.makeText(context, "Processing failed", Toast.LENGTH_SHORT).show()
+
             ProcessingOutcome.NONE -> Unit
         }
     }
@@ -149,13 +162,23 @@ fun FaceCollageScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top
             ) {
-                IconButton(onClick = { viewModel.flipCamera() }) {
-                    Text("↻", style = MaterialTheme.typography.headlineSmall)
+                IconButton(
+                    onClick = { viewModel.flipCamera() },
+                    colors = IconButtonDefaults.iconButtonColors(
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("↻", style = MaterialTheme.typography.headlineMedium)
                 }
 
                 Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Text("⋮", style = MaterialTheme.typography.headlineSmall)
+                    IconButton(
+                        onClick = { showMenu = true },
+                        colors = IconButtonDefaults.iconButtonColors(
+                            contentColor = Color.White
+                        )
+                    ) {
+                        Text("⋮", style = MaterialTheme.typography.headlineMedium)
                     }
                     DropdownMenu(
                         expanded = showMenu,
@@ -223,27 +246,30 @@ fun FaceCollageScreen(
                 contentAlignment = Alignment.Center
             ) {
                 if (state == AppState.RECORDING) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    Box(
+                        modifier = Modifier
+                            .width(200.dp)
+                            .height(82.dp),
+                        contentAlignment = Alignment.Center
                     ) {
+                        // Always centered
                         RoundIconButton(
                             symbol = "■",
-                            contentDescription = "Stop and process",
                             onClick = { cameraController.stopRecording(false) },
-                            containerSize = 76.dp
+                            containerSize = 76.dp,
+                            iconStyle = MaterialTheme.typography.headlineLarge
                         )
+
+                        // X sits to the right of the centered stop button
                         RoundIconButton(
                             symbol = "×",
-                            contentDescription = "Cancel recording",
                             onClick = { cameraController.stopRecording(true) },
-                            containerSize = 56.dp
+                            containerSize = 52.dp,
+                            modifier = Modifier.align(Alignment.CenterEnd)
                         )
                     }
                 } else {
-                    RoundIconButton(
-                        symbol = "▶",
-                        contentDescription = "Start recording",
+                    TransparentStrokeCircleButton(
                         onClick = {
                             val file = cameraController.startRecording(
                                 onStarted = {
@@ -336,12 +362,13 @@ fun FaceCollageScreen(
 @Composable
 private fun RoundIconButton(
     symbol: String,
-    contentDescription: String,
     onClick: () -> Unit,
-    containerSize: androidx.compose.ui.unit.Dp
+    containerSize: Dp,
+    modifier: Modifier = Modifier,
+    iconStyle: TextStyle = MaterialTheme.typography.headlineSmall,
 ) {
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .size(containerSize)
             .clip(CircleShape)
             .clickableNoRipple(onClick),
@@ -350,8 +377,71 @@ private fun RoundIconButton(
         tonalElevation = 4.dp
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(symbol, style = MaterialTheme.typography.headlineSmall)
+            Text(symbol, style = iconStyle)
         }
+    }
+}
+
+@Composable
+fun Modifier.clickableNoRipple(
+    interactionSource: MutableInteractionSource? = null,
+    onClick: () -> Unit
+): Modifier = this.then(
+    Modifier.clickable(
+        interactionSource = interactionSource ?: remember { MutableInteractionSource() },
+        indication = null, // Disables the default ripple effect
+        onClick = onClick
+    )
+)
+
+@Composable
+fun TransparentStrokeCircleButton(
+    onClick: () -> Unit,
+    containerSize: Dp,
+    modifier: Modifier = Modifier,
+    strokeColor: Color = Color.White,
+    strokeWidth: Dp = 4.dp,
+    pressedScale: Float = 0.90f // Adjust scale intensity here
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) pressedScale else 1.0f,
+        animationSpec = spring(
+            dampingRatio = 0.6f, // Adds subtle springiness
+            stiffness = 800f
+        ),
+        label = "press_scale_anim"
+    )
+
+    Surface(
+        modifier = modifier
+            .size(containerSize)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .clickableNoRipple(
+                interactionSource = interactionSource,
+                onClick = onClick
+            ),
+        shape = CircleShape,
+        color = Color.Transparent,
+        tonalElevation = 4.dp
+    ) {
+        Box(
+            modifier = Modifier
+                .size(containerSize)
+                .border(
+                    width = strokeWidth,
+                    color = strokeColor,
+                    shape = CircleShape
+                )
+                .clip(CircleShape),
+            contentAlignment = Alignment.Center
+        ) {}
     }
 }
 
@@ -374,12 +464,18 @@ private fun ConsoleDialog(
                     .padding(16.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Console", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                    Text(
+                        "Console",
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.weight(1f)
+                    )
                     OutlinedButton(onClick = onDismiss) { Text("Close") }
                 }
                 Spacer(Modifier.height(12.dp))
                 Surface(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = MaterialTheme.shapes.medium
                 ) {
@@ -389,7 +485,10 @@ private fun ConsoleDialog(
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = onCopy, modifier = Modifier.weight(1f)) { Text("Copy") }
+                    OutlinedButton(
+                        onClick = onCopy,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Copy") }
                     Button(onClick = onClear, modifier = Modifier.weight(1f)) { Text("Clear") }
                 }
             }
@@ -416,21 +515,36 @@ private fun CollagePreviewDialog(
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Your Face Collage", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Your Face Collage",
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.weight(1f)
+                    )
                     OutlinedButton(onClick = onDismiss) { Text("Close") }
                 }
                 Spacer(Modifier.height(14.dp))
                 Image(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = "Face collage",
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     contentScale = androidx.compose.ui.layout.ContentScale.Fit
                 )
                 Spacer(Modifier.height(14.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     Button(onClick = onSave, modifier = Modifier.weight(1f)) { Text("Save") }
-                    OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f)) { Text("Share") }
+                    OutlinedButton(
+                        onClick = onShare,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Share") }
                 }
             }
         }
@@ -449,7 +563,10 @@ private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri? {
         put(MediaStore.Images.Media.DISPLAY_NAME, "face_collage_${System.currentTimeMillis()}.png")
         put(MediaStore.Images.Media.MIME_TYPE, "image/png")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/FaceCollage")
+            put(
+                MediaStore.Images.Media.RELATIVE_PATH,
+                Environment.DIRECTORY_PICTURES + "/FaceCollage"
+            )
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
     }
@@ -457,7 +574,12 @@ private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri? {
     return try {
         resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+            resolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
+                null,
+                null
+            )
         }
         uri
     } catch (e: Exception) {
@@ -482,4 +604,5 @@ private fun shareBitmap(context: Context, bitmap: Bitmap) {
     }
 }
 
-private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.clickable(onClick = onClick)
+private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier =
+    this.clickable(onClick = onClick)
