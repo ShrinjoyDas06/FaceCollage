@@ -168,8 +168,9 @@ class VideoProcessor(
                             continue
                         }
 
-                        val aligned = FaceAlignment.align(frame, face, currentSettings)
-                        if (aligned == null) {
+                        // 1. Create aligned bitmap for embedding model
+                        val alignedForEmbedding = FaceAlignment.align(frame, face, currentSettings)
+                        if (alignedForEmbedding == null) {
                             rejectedInvalid++
                             onLog("  Face $faceIndex rejected: alignment failed")
                             continue
@@ -183,9 +184,9 @@ class VideoProcessor(
                         if (landmarksPresent) alignedFaces++ else fallbackFaces++
 
                         val embedding = try {
-                            embedder.getEmbedding(aligned)
+                            embedder.getEmbedding(alignedForEmbedding)
                         } catch (e: Exception) {
-                            aligned.recycle()
+                            alignedForEmbedding.recycle()
                             throw e
                         }
 
@@ -197,9 +198,27 @@ class VideoProcessor(
                                     if (landmarksPresent) "aligned" else "fallback"
                         )
 
+                        // 2. Add padding to the raw bounding box for the visual collage crop
+                        val paddingFactor = 0.3f // 30% padding around face
+                        val padX = (width * paddingFactor).toInt()
+                        val padY = (height * paddingFactor).toInt()
+
+                        val cropLeft = (left - padX).coerceAtLeast(0)
+                        val cropTop = (top - padY).coerceAtLeast(0)
+                        val cropRight = (right + padX).coerceAtMost(frame.width)
+                        val cropBottom = (bottom + padY).coerceAtMost(frame.height)
+
+                        val displayCrop = Bitmap.createBitmap(
+                            frame,
+                            cropLeft,
+                            cropTop,
+                            cropRight - cropLeft,
+                            cropBottom - cropTop
+                        )
+
                         detectedFaces.add(
                             FaceSample(
-                                bitmap = aligned,
+                                bitmap = displayCrop,
                                 area = area,
                                 frameWidth = frame.width,
                                 frameHeight = frame.height,
